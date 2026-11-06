@@ -7,15 +7,21 @@ import {
   DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
 
+// Helper to clean environment variables of any accidental whitespace or wrapping quotes
+function cleanEnv(val: string | undefined, fallback = ""): string {
+  if (!val) return fallback;
+  return val.trim().replace(/^["']|["']$/g, "");
+}
+
 // Lazy-initialized S3 client to avoid build-time errors if env vars are evaluated statically
 let s3ClientInstance: S3Client | null = null;
 
 export function getB2Client(): S3Client {
   if (!s3ClientInstance) {
-    const endpoint = process.env.B2_ENDPOINT || "https://s3.us-east-005.backblazeb2.com";
-    const region = process.env.B2_REGION || "us-east-005";
-    const accessKeyId = process.env.B2_KEY_ID;
-    const secretAccessKey = process.env.B2_APPLICATION_KEY;
+    const endpoint = cleanEnv(process.env.B2_ENDPOINT, "https://s3.us-east-005.backblazeb2.com");
+    const region = cleanEnv(process.env.B2_REGION, "us-east-005");
+    const accessKeyId = cleanEnv(process.env.B2_KEY_ID);
+    const secretAccessKey = cleanEnv(process.env.B2_APPLICATION_KEY);
 
     if (!accessKeyId || !secretAccessKey) {
       throw new Error("Missing Backblaze B2 credentials (B2_KEY_ID or B2_APPLICATION_KEY)");
@@ -36,8 +42,8 @@ export function getB2Client(): S3Client {
   return s3ClientInstance;
 }
 
-export const B2_BUCKET = process.env.B2_BUCKET || "tradeengine";
-export const B2_PREFIX = process.env.B2_PREFIX || "cofounder-tracker/";
+export const B2_BUCKET = cleanEnv(process.env.B2_BUCKET, "tradeengine");
+export const B2_PREFIX = cleanEnv(process.env.B2_PREFIX, "cofounder-tracker/");
 
 export function getFullKey(relativeKey: string): string {
   const cleanRelative = relativeKey.startsWith("/") ? relativeKey.slice(1) : relativeKey;
