@@ -1,0 +1,16 @@
+{
+  "name": "Tradopad",
+  "short_name": "Tradopad",
+  "description": "Minimal Notion-style workspace for co-founders",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#FFFFFF",
+  "theme_color": "#FFFFFF",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}
