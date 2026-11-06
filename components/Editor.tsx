@@ -18,6 +18,7 @@ import { SelectionToolbar } from "./SelectionToolbar";
 import { SlashMenu, SlashMenuItem } from "./SlashMenu";
 import { MobileToolbar } from "./MobileToolbar";
 import {
+  Plus,
   Type,
   Heading1,
   Heading2,
@@ -81,18 +82,29 @@ export function Editor({
     query: string;
     position: { top: number; left: number };
     range: { from: number; to: number };
+    hasSlash: boolean;
+    isFromPlusButton: boolean;
   }>({
     isOpen: false,
     query: "",
     position: { top: 0, left: 0 },
     range: { from: 0, to: 0 },
+    hasSlash: false,
+    isFromPlusButton: false,
   });
 
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isFocused, setIsFocused] = useState(false);
+  const [cursorTop, setCursorTop] = useState<number>(4);
+  const [hoveredTop, setHoveredTop] = useState<number | null>(null);
+  const [hoveredBlockEl, setHoveredBlockEl] = useState<HTMLElement | null>(null);
+  const [isCurrentLineEmpty, setIsCurrentLineEmpty] = useState<boolean>(true);
+  const [isHoveringEditor, setIsHoveringEditor] = useState<boolean>(false);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const editorInstanceRef = useRef<any>(null);
+  const wrapperRef = useRef<HTMLDivElement>(null);
 
   // Upload handler for File objects
   const uploadImageFile = useCallback(
@@ -238,13 +250,23 @@ export function Editor({
           query,
           position: { top: coords.bottom, left: coords.left },
           range: { from: $from.start(), to: $from.pos },
+          hasSlash: true,
+          isFromPlusButton: false,
         });
       } else {
-        setSlashMenu((prev) => (prev.isOpen ? { ...prev, isOpen: false } : prev));
+        setSlashMenu((prev) =>
+          prev.isOpen && prev.hasSlash ? { ...prev, isOpen: false } : prev
+        );
       }
+
+      updateCursorPos();
+    },
+    onSelectionUpdate: () => {
+      updateCursorPos();
     },
     onFocus: () => {
       setIsFocused(true);
+      updateCursorPos();
       onFocus?.();
     },
     onBlur: () => {
@@ -254,10 +276,88 @@ export function Editor({
       }, 200);
       onBlur?.();
       setTimeout(() => {
-        setSlashMenu((prev) => ({ ...prev, isOpen: false }));
+        setSlashMenu((prev) => (prev.hasSlash ? { ...prev, isOpen: false } : prev));
       }, 150);
     },
   });
+
+  // Calculate current cursor vertical position relative to wrapper
+  const updateCursorPos = useCallback(() => {
+    if (!editor || !editor.view || !wrapperRef.current) return;
+    try {
+      const { state, view } = editor;
+      const { $from } = state.selection;
+      const coords = view.coordsAtPos($from.pos);
+      const wrapperRect = wrapperRef.current.getBoundingClientRect();
+      const currentLineText = $from.parent.textContent;
+      setIsCurrentLineEmpty(currentLineText.trim() === "");
+
+      const top = coords.top - wrapperRect.top + 2;
+      setCursorTop(Math.max(2, top));
+    } catch {
+      // Safe fallback if editor not mounted
+    }
+  }, [editor]);
+
+  // Handle mouse move over editor to track hovered block
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    setIsHoveringEditor(true);
+    if (!wrapperRef.current) return;
+    const target = e.target as HTMLElement;
+    const block = target.closest(
+      ".tiptap > p, .tiptap > h1, .tiptap > h2, .tiptap > h3, .tiptap > blockquote, .tiptap > ul, .tiptap > ol, .tiptap > hr, .tiptap > [data-type='taskList']"
+    ) as HTMLElement | null;
+
+    if (block) {
+      const blockRect = block.getBoundingClientRect();
+      const wrapperRect = wrapperRef.current.getBoundingClientRect();
+      const top = blockRect.top - wrapperRect.top + 2;
+      setHoveredTop(Math.max(2, top));
+      setHoveredBlockEl(block);
+    }
+  }, []);
+
+  const handleMouseLeave = useCallback(() => {
+    setIsHoveringEditor(false);
+    setHoveredTop(null);
+    setHoveredBlockEl(null);
+  }, []);
+
+  // Handle '+' button click
+  const handlePlusClick = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (!editor) return;
+
+    // Focus editor at hovered block or current selection
+    if (hoveredBlockEl) {
+      try {
+        const pos = editor.view.posAtDOM(hoveredBlockEl, 0);
+        editor.chain().focus().setTextSelection(pos).run();
+      } catch {
+        editor.commands.focus();
+      }
+    } else {
+      editor.commands.focus();
+    }
+
+    const buttonRect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const { state } = editor;
+    const { $from } = state.selection;
+
+    setSlashMenu({
+      isOpen: true,
+      query: "",
+      position: {
+        top: buttonRect.bottom + 4,
+        left: Math.max(16, buttonRect.left),
+      },
+      range: { from: $from.pos, to: $from.pos },
+      hasSlash: false,
+      isFromPlusButton: true,
+    });
+  };
 
   // Keep references synced
   useEffect(() => {
@@ -266,6 +366,13 @@ export function Editor({
       editorRef.current = editor;
     }
   }, [editor, editorRef]);
+
+  // Recalculate position on window resize or load
+  useEffect(() => {
+    if (editor) {
+      updateCursorPos();
+    }
+  }, [editor, updateCursorPos]);
 
   // Slash menu items
   const slashMenuItems: SlashMenuItem[] = [
@@ -277,7 +384,11 @@ export function Editor({
       keywords: ["paragraph", "plain", "normal"],
       action: () => {
         if (!editor) return;
-        editor.chain().focus().deleteRange(slashMenu.range).setParagraph().run();
+        if (slashMenu.hasSlash) {
+          editor.chain().focus().deleteRange(slashMenu.range).setParagraph().run();
+        } else {
+          editor.chain().focus().setParagraph().run();
+        }
       },
     },
     {
@@ -288,7 +399,11 @@ export function Editor({
       keywords: ["h1", "title", "large"],
       action: () => {
         if (!editor) return;
-        editor.chain().focus().deleteRange(slashMenu.range).setHeading({ level: 1 }).run();
+        if (slashMenu.hasSlash) {
+          editor.chain().focus().deleteRange(slashMenu.range).setHeading({ level: 1 }).run();
+        } else {
+          editor.chain().focus().setHeading({ level: 1 }).run();
+        }
       },
     },
     {
@@ -299,7 +414,11 @@ export function Editor({
       keywords: ["h2", "subtitle", "medium"],
       action: () => {
         if (!editor) return;
-        editor.chain().focus().deleteRange(slashMenu.range).setHeading({ level: 2 }).run();
+        if (slashMenu.hasSlash) {
+          editor.chain().focus().deleteRange(slashMenu.range).setHeading({ level: 2 }).run();
+        } else {
+          editor.chain().focus().setHeading({ level: 2 }).run();
+        }
       },
     },
     {
@@ -310,7 +429,11 @@ export function Editor({
       keywords: ["h3", "subheading", "small"],
       action: () => {
         if (!editor) return;
-        editor.chain().focus().deleteRange(slashMenu.range).setHeading({ level: 3 }).run();
+        if (slashMenu.hasSlash) {
+          editor.chain().focus().deleteRange(slashMenu.range).setHeading({ level: 3 }).run();
+        } else {
+          editor.chain().focus().setHeading({ level: 3 }).run();
+        }
       },
     },
     {
@@ -321,7 +444,11 @@ export function Editor({
       keywords: ["todo", "task", "checkbox"],
       action: () => {
         if (!editor) return;
-        editor.chain().focus().deleteRange(slashMenu.range).toggleTaskList().run();
+        if (slashMenu.hasSlash) {
+          editor.chain().focus().deleteRange(slashMenu.range).toggleTaskList().run();
+        } else {
+          editor.chain().focus().toggleTaskList().run();
+        }
       },
     },
     {
@@ -332,7 +459,11 @@ export function Editor({
       keywords: ["bullet", "unordered", "list"],
       action: () => {
         if (!editor) return;
-        editor.chain().focus().deleteRange(slashMenu.range).toggleBulletList().run();
+        if (slashMenu.hasSlash) {
+          editor.chain().focus().deleteRange(slashMenu.range).toggleBulletList().run();
+        } else {
+          editor.chain().focus().toggleBulletList().run();
+        }
       },
     },
     {
@@ -343,7 +474,11 @@ export function Editor({
       keywords: ["number", "ordered", "list"],
       action: () => {
         if (!editor) return;
-        editor.chain().focus().deleteRange(slashMenu.range).toggleOrderedList().run();
+        if (slashMenu.hasSlash) {
+          editor.chain().focus().deleteRange(slashMenu.range).toggleOrderedList().run();
+        } else {
+          editor.chain().focus().toggleOrderedList().run();
+        }
       },
     },
     {
@@ -354,7 +489,11 @@ export function Editor({
       keywords: ["quote", "blockquote"],
       action: () => {
         if (!editor) return;
-        editor.chain().focus().deleteRange(slashMenu.range).toggleBlockquote().run();
+        if (slashMenu.hasSlash) {
+          editor.chain().focus().deleteRange(slashMenu.range).toggleBlockquote().run();
+        } else {
+          editor.chain().focus().toggleBlockquote().run();
+        }
       },
     },
     {
@@ -365,7 +504,11 @@ export function Editor({
       keywords: ["divider", "hr", "separator", "line"],
       action: () => {
         if (!editor) return;
-        editor.chain().focus().deleteRange(slashMenu.range).setHorizontalRule().run();
+        if (slashMenu.hasSlash) {
+          editor.chain().focus().deleteRange(slashMenu.range).setHorizontalRule().run();
+        } else {
+          editor.chain().focus().setHorizontalRule().run();
+        }
       },
     },
     {
@@ -376,7 +519,9 @@ export function Editor({
       keywords: ["image", "picture", "photo", "upload"],
       action: () => {
         if (!editor) return;
-        editor.chain().focus().deleteRange(slashMenu.range).run();
+        if (slashMenu.hasSlash) {
+          editor.chain().focus().deleteRange(slashMenu.range).run();
+        }
         fileInputRef.current?.click();
       },
     },
@@ -391,8 +536,38 @@ export function Editor({
     return <div className="py-4 text-text-placeholder text-[14px]">Loading editor...</div>;
   }
 
+  // Active top position for the '+' gutter button
+  const effectivePlusTop = hoveredTop !== null ? hoveredTop : cursorTop;
+
   return (
-    <div className="relative w-full">
+    <div
+      ref={wrapperRef}
+      onMouseMove={handleMouseMove}
+      onMouseLeave={handleMouseLeave}
+      className="relative w-full"
+    >
+      {/* Notion-style Left Gutter '+' Add Block Button */}
+      {effectivePlusTop !== null && (
+        <div
+          style={{ top: `${effectivePlusTop}px` }}
+          className={`absolute -left-6 sm:-left-7 md:-left-8 z-20 flex items-center transition-opacity duration-150 ${
+            isHoveringEditor || isCurrentLineEmpty || slashMenu.isOpen
+              ? "opacity-100"
+              : "opacity-0 hover:opacity-100"
+          }`}
+        >
+          <button
+            type="button"
+            onClick={handlePlusClick}
+            onMouseDown={(e) => e.preventDefault()}
+            title="Click to add blocks (or type '/')"
+            className="w-6 h-6 rounded-[4px] flex items-center justify-center text-text-placeholder hover:text-text-primary hover:bg-hover-fill notion-hover-transition cursor-pointer select-none"
+          >
+            <Plus size={16} strokeWidth={2} />
+          </button>
+        </div>
+      )}
+
       {/* Hidden file input for image uploads */}
       <input
         type="file"
@@ -445,7 +620,7 @@ export function Editor({
         </div>
       )}
 
-      {/* Slash Command Menu */}
+      {/* Slash / Plus Command Menu */}
       {slashMenu.isOpen && (
         <SlashMenu
           query={slashMenu.query}
@@ -453,6 +628,7 @@ export function Editor({
           onClose={() => setSlashMenu((prev) => ({ ...prev, isOpen: false }))}
           items={slashMenuItems}
           position={slashMenu.position}
+          isFromPlusButton={slashMenu.isFromPlusButton}
         />
       )}
     </div>
